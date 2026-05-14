@@ -1,0 +1,6 @@
+{
+  "name": "e-SUS AB Status",
+  "description": "Status dashboard monitoring https://esusab.saude.gov.br/",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
