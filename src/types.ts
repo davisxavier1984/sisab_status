@@ -1,18 +1,16 @@
-export type EnvioStatus = 'enviado' | 'pendente' | 'atrasado';
+export type ServiceState = 'operational' | 'degraded' | 'down' | 'checking';
 
-export interface Equipe {
-  ine: string;
-  nome: string;
-  tipo: string;
-  municipio: string;
-  uf: string;
-  status: EnvioStatus;
-  ultimoEnvio: string | null;
-  fichas: number;
-}
-
-export interface Competencia {
+export interface ServiceConfig {
   id: string;
-  label: string;
-  prazo: string;
+  name: string;
+  description: string;
+  url: string;
 }
+
+export interface CheckSample {
+  at: number;
+  state: Exclude<ServiceState, 'checking'>;
+  responseTime: number | null;
+}
+
+export type HistoryMap = Record<string, CheckSample[]>;

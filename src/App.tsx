@@ -1,40 +1,55 @@
-import { useMemo, useState } from 'react';
-import { competencias, getEquipes } from './data';
-import type { EnvioStatus } from './types';
-import { SummaryCards } from './components/SummaryCards';
-import { EquipeTable } from './components/EquipeTable';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { SERVICES, checkService } from './monitor';
+import { appendSample, loadHistory, saveHistory } from './history';
+import type { HistoryMap, ServiceState } from './types';
+import { OverallBanner } from './components/OverallBanner';
+import { ServiceCard } from './components/ServiceCard';
 
-type Filtro = EnvioStatus | 'todos';
+const REFRESH_MS = 60_000;
 
-const FILTROS: { id: Filtro; label: string }[] = [
-  { id: 'todos', label: 'Todos' },
-  { id: 'enviado', label: 'Enviados' },
-  { id: 'pendente', label: 'Pendentes' },
-  { id: 'atrasado', label: 'Atrasados' },
-];
+function overallState(history: HistoryMap): ServiceState {
+  let result: ServiceState = 'operational';
+  let hasData = false;
+  for (const service of SERVICES) {
+    const samples = history[service.id];
+    const latest = samples?.[samples.length - 1];
+    if (!latest) continue;
+    hasData = true;
+    if (latest.state === 'down') return 'down';
+    if (latest.state === 'degraded') result = 'degraded';
+  }
+  return hasData ? result : 'checking';
+}
 
 export function App() {
-  const [competenciaId, setCompetenciaId] = useState(competencias[0].id);
-  const [filtro, setFiltro] = useState<Filtro>('todos');
-  const [busca, setBusca] = useState('');
+  const [history, setHistory] = useState<HistoryMap>(() => loadHistory());
+  const [checking, setChecking] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  const competencia = competencias.find((c) => c.id === competenciaId)!;
-  const equipes = useMemo(() => getEquipes(competenciaId), [competenciaId]);
-
-  const equipesFiltradas = useMemo(() => {
-    const termo = busca.trim().toLowerCase();
-    return equipes.filter((e) => {
-      if (filtro !== 'todos' && e.status !== filtro) return false;
-      if (!termo) return true;
-      return (
-        e.nome.toLowerCase().includes(termo) ||
-        e.municipio.toLowerCase().includes(termo) ||
-        e.ine.includes(termo)
-      );
+  const runChecks = useCallback(async () => {
+    setChecking(true);
+    const results = await Promise.all(
+      SERVICES.map(async (s) => ({ id: s.id, sample: await checkService(s.url) })),
+    );
+    setHistory((prev) => {
+      let next = prev;
+      for (const { id, sample } of results) {
+        next = appendSample(next, id, sample);
+      }
+      saveHistory(next);
+      return next;
     });
-  }, [equipes, filtro, busca]);
+    setLastUpdated(new Date());
+    setChecking(false);
+  }, []);
 
-  const prazoFmt = new Date(`${competencia.prazo}T00:00:00`).toLocaleDateString('pt-BR');
+  useEffect(() => {
+    runChecks();
+    const id = setInterval(runChecks, REFRESH_MS);
+    return () => clearInterval(id);
+  }, [runChecks]);
+
+  const overall = useMemo(() => overallState(history), [history]);
 
   return (
     <div className="app">
@@ -42,56 +57,32 @@ export function App() {
         <div>
           <h1>SISAB Status</h1>
           <p className="subtitle">
-            Acompanhamento de envios de produção à Atenção Primária
+            Status operacional dos sistemas do e-SUS Atenção Primária à Saúde
           </p>
         </div>
-        <label className="competencia">
-          <span>Competência</span>
-          <select
-            value={competenciaId}
-            onChange={(ev) => setCompetenciaId(ev.target.value)}
-          >
-            {competencias.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <button className="refresh" onClick={runChecks} disabled={checking}>
+          {checking ? 'Verificando…' : 'Atualizar'}
+        </button>
       </header>
 
-      <p className="prazo">
-        Prazo de envio desta competência: <strong>{prazoFmt}</strong>
-      </p>
+      <OverallBanner state={overall} />
 
-      <SummaryCards equipes={equipes} />
-
-      <div className="toolbar">
-        <div className="filtros">
-          {FILTROS.map((f) => (
-            <button
-              key={f.id}
-              className={`chip ${filtro === f.id ? 'chip--active' : ''}`}
-              onClick={() => setFiltro(f.id)}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-        <input
-          className="busca"
-          type="search"
-          placeholder="Buscar por equipe, município ou INE"
-          value={busca}
-          onChange={(ev) => setBusca(ev.target.value)}
-        />
+      <div className="services">
+        {SERVICES.map((s) => (
+          <ServiceCard key={s.id} service={s} samples={history[s.id] ?? []} />
+        ))}
       </div>
 
-      <EquipeTable equipes={equipesFiltradas} />
-
       <footer className="footer">
-        {equipesFiltradas.length} de {equipes.length} equipes exibidas · Dados
-        de demonstração
+        <span>
+          {lastUpdated
+            ? `Atualizado às ${lastUpdated.toLocaleTimeString('pt-BR')} · atualização automática a cada 60 s`
+            : 'Verificando…'}
+        </span>
+        <span>
+          Verificação cross-origin (no-cors): mede alcançabilidade e latência, não
+          o status HTTP exato. Histórico mantido apenas neste navegador.
+        </span>
       </footer>
     </div>
   );
